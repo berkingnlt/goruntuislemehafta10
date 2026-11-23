@@ -1,0 +1,15 @@
+Blok boyutu: 7
+Disparity araligi: 0-31
+
+SAD
+Hesaplama suresi: 1249.95 ms
+Disparity atanan piksel orani: %88.482
+
+SSD
+Hesaplama suresi: 829.069 ms
+Disparity atanan piksel orani: %88.482
+
+ZNCC
+Hesaplama suresi: 1001.69 ms
+Disparity atanan piksel orani: %88.482
+
