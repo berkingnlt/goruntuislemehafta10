@@ -1,0 +1,17 @@
+Blok boyutu: 5
+Disparity araligi: 0-31
+Yon sayisi: 8
+Ortak maliyet hacmi suresi: 695.312 ms
+
+Cezasiz P1=0 P2=0
+Birikim ve disparity secimi: 1955.84 ms
+Maliyet olusturma dahil toplam: 2651.15 ms
+
+Orta P1=200 P2=800
+Birikim ve disparity secimi: 1852.94 ms
+Maliyet olusturma dahil toplam: 2548.26 ms
+
+Yuksek P1=800 P2=3200
+Birikim ve disparity secimi: 1815.93 ms
+Maliyet olusturma dahil toplam: 2511.24 ms
+
