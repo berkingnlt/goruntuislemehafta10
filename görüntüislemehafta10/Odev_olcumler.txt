@@ -1,0 +1,20 @@
+DENSE
+Toplam sure: 2237.9 ms
+Pozitif eslesme adayi: 88186
+Tutarlilik kontrolunu gecen: 74083
+Ortak alanda kapsama: %83.1347
+Sol-sag kontrolunu gecme orani: %84.0077
+Eslesen piksellerin fotometrik MAE degeri: 3.60143
+
+SPARSE
+Toplam sure: 137.346 ms
+Pozitif eslesme adayi: 10734
+Tutarlilik kontrolunu gecen: 8598
+Ortak alanda kapsama: %9.64853
+Sol-sag kontrolunu gecme orani: %80.1006
+Eslesen piksellerin fotometrik MAE degeri: 12.2762
+
+Dense suresi / Sparse suresi: 16.2939
+Sparse suresine Gaussian ve Canny dahildir.
+Okuma, kaydetme ve gorsellestirme harictir.
+Fotometrik MAE disparity dogrulugu degildir.

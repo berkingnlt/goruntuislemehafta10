@@ -8,211 +8,186 @@
 #include <opencv2/highgui.hpp>
 #include <iostream>
 #include <fstream>
-#include <vector>
 #include <string>
-#include <algorithm>
+#include <limits>
 #include <cstdlib>
+#include <cmath>
 
 using namespace cv;
 using namespace std;
 
-struct MaliyetHacmi
-{
-    int genislik, yukseklik, disparitySayisi;
-    int baslangicX, baslangicY;
-    vector<int> degerler;
-
-    size_t indeks(int x, int y, int d) const
-    {
-        return (static_cast<size_t>(y) * genislik + x)
-            * disparitySayisi + d;
-    }
-};
-
-MaliyetHacmi maliyetOlustur(const Mat& sol, const Mat& sag,
+Mat blokEslestir(const Mat& a, const Mat& b,
+    const Mat& kenarA, const Mat& kenarB,
+    bool seyrek, bool ters,
     int blokBoyutu, int disparitySayisi)
 {
-    CV_Assert(sol.type() == CV_8UC1);
-    CV_Assert(sag.type() == CV_8UC1);
-    CV_Assert(sol.size() == sag.size());
-    CV_Assert(blokBoyutu >= 3 && blokBoyutu % 2 == 1);
-    CV_Assert(disparitySayisi > 0);
+    Mat disparity(a.size(), CV_32F, Scalar(-1));
 
     int yari = blokBoyutu / 2;
+    int maksimumD = disparitySayisi - 1;
 
-    MaliyetHacmi hacim;
-    hacim.baslangicX = disparitySayisi - 1 + yari;
-    hacim.baslangicY = yari;
-    hacim.genislik = sol.cols - hacim.baslangicX - yari;
-    hacim.yukseklik = sol.rows - 2 * yari;
-    hacim.disparitySayisi = disparitySayisi;
+    int baslangicX = ters ? yari : maksimumD + yari;
+    int bitisX = ters
+        ? a.cols - maksimumD - yari
+        : a.cols - yari;
 
-    CV_Assert(hacim.genislik > 0 && hacim.yukseklik > 0);
-
-    hacim.degerler.resize(
-        static_cast<size_t>(hacim.genislik)
-        * hacim.yukseklik * disparitySayisi
-    );
-
-    for (int y = 0; y < hacim.yukseklik; y++)
+    for (int y = yari; y < a.rows - yari; y++)
     {
-        int resimY = y + hacim.baslangicY;
-
-        for (int x = 0; x < hacim.genislik; x++)
+        for (int x = baslangicX; x < bitisX; x++)
         {
-            int resimX = x + hacim.baslangicX;
+            if (seyrek && kenarA.at<uchar>(y, x) == 0)
+                continue;
+
+            int enIyiMaliyet = numeric_limits<int>::max();
+            int enIyiD = -1;
 
             for (int d = 0; d < disparitySayisi; d++)
             {
+                int adayX = ters ? x + d : x - d;
+
+                if (seyrek && kenarB.at<uchar>(y, adayX) == 0)
+                    continue;
+
                 int sad = 0;
 
                 for (int dy = -yari; dy <= yari; dy++)
                 {
-                    const uchar* a = sol.ptr<uchar>(resimY + dy);
-                    const uchar* b = sag.ptr<uchar>(resimY + dy);
+                    const uchar* satirA = a.ptr<uchar>(y + dy);
+                    const uchar* satirB = b.ptr<uchar>(y + dy);
 
                     for (int dx = -yari; dx <= yari; dx++)
                     {
                         sad += std::abs(
-                            int(a[resimX + dx])
-                            - int(b[resimX - d + dx])
+                            int(satirA[x + dx])
+                            - int(satirB[adayX + dx])
                         );
                     }
                 }
 
-                hacim.degerler[hacim.indeks(x, y, d)] = sad;
-            }
-        }
-    }
-
-    return hacim;
-}
-
-Mat manuelSGM(const MaliyetHacmi& hacim, Size resimBoyutu,
-    int P1, int P2)
-{
-    CV_Assert(P1 >= 0 && P2 >= P1);
-
-    int W = hacim.genislik;
-    int H = hacim.yukseklik;
-    int D = hacim.disparitySayisi;
-
-    vector<int> toplam(hacim.degerler.size(), 0);
-
-    const int yonler[8][2] = {
-        { 1, 0 }, { -1, 0 },
-        { 0, 1 }, { 0, -1 },
-        { 1, 1 }, { -1, -1 },
-        { 1, -1 }, { -1, 1 }
-    };
-
-    const int sonsuz = 100000000;
-
-    for (int yon = 0; yon < 8; yon++)
-    {
-        int dx = yonler[yon][0];
-        int dy = yonler[yon][1];
-
-        for (int sy = 0; sy < H; sy++)
-        {
-            for (int sx = 0; sx < W; sx++)
-            {
-                int oncekiX = sx - dx;
-                int oncekiY = sy - dy;
-
-                if (oncekiX >= 0 && oncekiX < W &&
-                    oncekiY >= 0 && oncekiY < H)
-                    continue;
-
-                vector<int> onceki(D, 0);
-                vector<int> simdiki(D, 0);
-
-                bool ilkPiksel = true;
-                int x = sx;
-                int y = sy;
-
-                while (x >= 0 && x < W && y >= 0 && y < H)
+                if (sad < enIyiMaliyet)
                 {
-                    int minimumOnceki = 0;
-
-                    if (!ilkPiksel)
-                    {
-                        minimumOnceki = *min_element(
-                            onceki.begin(), onceki.end()
-                        );
-                    }
-
-                    for (int d = 0; d < D; d++)
-                    {
-                        size_t indis = hacim.indeks(x, y, d);
-                        int maliyet = hacim.degerler[indis];
-
-                        if (ilkPiksel)
-                        {
-                            simdiki[d] = maliyet;
-                        }
-                        else
-                        {
-                            int ayni = onceki[d];
-
-                            int birAz = (d > 0)
-                                ? onceki[d - 1] + P1 : sonsuz;
-
-                            int birFazla = (d + 1 < D)
-                                ? onceki[d + 1] + P1 : sonsuz;
-
-                            int buyukDegisim = minimumOnceki + P2;
-
-                            int enIyi = std::min(
-                                std::min(ayni, birAz),
-                                std::min(birFazla, buyukDegisim)
-                            );
-
-                            simdiki[d] =
-                                maliyet + enIyi - minimumOnceki;
-                        }
-
-                        toplam[indis] += simdiki[d];
-                    }
-
-                    onceki.swap(simdiki);
-                    ilkPiksel = false;
-
-                    x += dx;
-                    y += dy;
-                }
-            }
-        }
-    }
-
-    Mat disparity(resimBoyutu, CV_32F, Scalar(-1));
-
-    for (int y = 0; y < H; y++)
-    {
-        for (int x = 0; x < W; x++)
-        {
-            int enIyiD = 0;
-            int enIyiMaliyet = sonsuz;
-
-            for (int d = 0; d < D; d++)
-            {
-                int maliyet = toplam[hacim.indeks(x, y, d)];
-
-                if (maliyet < enIyiMaliyet)
-                {
-                    enIyiMaliyet = maliyet;
+                    enIyiMaliyet = sad;
                     enIyiD = d;
                 }
             }
 
-            disparity.at<float>(
-                y + hacim.baslangicY,
-                x + hacim.baslangicX
-            ) = static_cast<float>(enIyiD);
+            disparity.at<float>(y, x) =
+                static_cast<float>(enIyiD);
         }
     }
 
     return disparity;
+}
+
+Mat tutarlilikKontrolu(const Mat& solDisparity,
+    const Mat& sagDisparity)
+{
+    Mat sonuc(solDisparity.size(), CV_32F, Scalar(-1));
+
+    for (int y = 0; y < solDisparity.rows; y++)
+    {
+        for (int x = 0; x < solDisparity.cols; x++)
+        {
+            float dSol = solDisparity.at<float>(y, x);
+
+            if (dSol <= 0)
+                continue;
+
+            int sagX = x - cvRound(dSol);
+
+            if (sagX < 0 || sagX >= sagDisparity.cols)
+                continue;
+
+            float dSag = sagDisparity.at<float>(y, sagX);
+
+            if (dSag > 0 && std::abs(dSol - dSag) <= 1.0f)
+                sonuc.at<float>(y, x) = dSol;
+        }
+    }
+
+    return sonuc;
+}
+
+void haritaKaydet(const string& ad, const Mat& disparity,
+    int disparitySayisi, Mat& renkli)
+{
+    Mat maske = disparity > 0;
+    Mat gri;
+
+    disparity.convertTo(
+        gri, CV_8U, 255.0 / (disparitySayisi - 1)
+    );
+
+    gri.setTo(0, maske == 0);
+
+    applyColorMap(gri, renkli, COLORMAP_JET);
+    renkli.setTo(Scalar(0, 0, 0), maske == 0);
+
+    if (!imwrite(ad + "_gri.png", gri) ||
+        !imwrite(ad + "_renkli.png", renkli) ||
+        !imwrite(ad + "_maske.png", maske))
+    {
+        CV_Error(Error::StsError, "Resimler kaydedilemedi.");
+    }
+}
+
+void olcumYaz(ostream& cikti, const string& ad,
+    const Mat& ham, const Mat& sonuc,
+    const Mat& sol, const Mat& sag,
+    const Mat& ortakAlan, double sure)
+{
+    Mat adayMaske = (ham > 0) & ortakAlan;
+    Mat gecerliMaske = (sonuc > 0) & ortakAlan;
+
+    int alan = countNonZero(ortakAlan);
+    int aday = countNonZero(adayMaske);
+    int gecerli = countNonZero(gecerliMaske);
+
+    double toplamFark = 0;
+
+    for (int y = 0; y < sol.rows; y++)
+    {
+        for (int x = 0; x < sol.cols; x++)
+        {
+            if (gecerliMaske.at<uchar>(y, x) == 0)
+                continue;
+
+            int d = cvRound(sonuc.at<float>(y, x));
+
+            toplamFark += std::abs(
+                int(sol.at<uchar>(y, x))
+                - int(sag.at<uchar>(y, x - d))
+            );
+        }
+    }
+
+    cikti << ad << "\n";
+    cikti << "Toplam sure: " << sure << " ms\n";
+    cikti << "Pozitif eslesme adayi: " << aday << "\n";
+    cikti << "Tutarlilik kontrolunu gecen: " << gecerli << "\n";
+
+    cikti << "Ortak alanda kapsama: %"
+        << 100.0 * gecerli / alan << "\n";
+
+    if (aday > 0)
+    {
+        cikti << "Sol-sag kontrolunu gecme orani: %"
+            << 100.0 * gecerli / aday << "\n";
+    }
+    else
+    {
+        cikti << "Sol-sag kontrolunu gecme orani: hesaplanamadi\n";
+    }
+
+    if (gecerli > 0)
+    {
+        cikti << "Eslesen piksellerin fotometrik MAE degeri: "
+            << toplamFark / gecerli << "\n\n";
+    }
+    else
+    {
+        cikti << "Fotometrik MAE: hesaplanamadi\n\n";
+    }
 }
 
 int main()
@@ -230,7 +205,7 @@ int main()
 
         if (sol.size() != sag.size())
         {
-            cerr << "Goruntu boyutlari ayni olmali.\n";
+            cerr << "Goruntulerin boyutlari ayni olmali.\n";
             return 1;
         }
 
@@ -238,135 +213,166 @@ int main()
         cvtColor(sol, solGri, COLOR_BGR2GRAY);
         cvtColor(sag, sagGri, COLOR_BGR2GRAY);
 
-        const int blokBoyutu = 5;
+        const int blokBoyutu = 7;
         const int disparitySayisi = 32;
+        const int yari = blokBoyutu / 2;
+        const int kenarPayi = disparitySayisi - 1 + yari;
 
-        TickMeter maliyetSuresi;
-        maliyetSuresi.start();
-
-        MaliyetHacmi hacim = maliyetOlustur(
-            solGri, sagGri, blokBoyutu, disparitySayisi
-        );
-
-        maliyetSuresi.stop();
-
-        int p1Degerleri[] = { 0, 200, 800 };
-        int p2Degerleri[] = { 0, 800, 3200 };
-
-        string adlar[] = {
-            "Cezasiz", "Orta", "Yuksek"
-        };
-
-        ofstream rapor("4_olcumler.txt");
-        FileStorage veriler(
-            "4_disparity_verileri.yml", FileStorage::WRITE
-        );
-
-        if (!rapor.is_open() || !veriler.isOpened())
+        if (sol.cols <= 2 * kenarPayi ||
+            sol.rows <= 2 * yari)
         {
-            cerr << "Sonuc dosyalari acilamadi.\n";
+            cerr << "Goruntuler bu parametreler icin cok kucuk.\n";
             return 1;
         }
 
-        rapor << "Blok boyutu: " << blokBoyutu << "\n";
-        rapor << "Disparity araligi: 0-31\n";
-        rapor << "Yon sayisi: 8\n";
-        rapor << "Ortak maliyet hacmi suresi: "
-            << maliyetSuresi.getTimeMilli() << " ms\n\n";
+        cout << "Dense eslestirme hesaplaniyor...\n";
 
-        Mat renkliSonuclar[3];
+        TickMeter denseSure;
+        denseSure.start();
 
-        for (int i = 0; i < 3; i++)
+        Mat denseSol = blokEslestir(
+            solGri, sagGri, Mat(), Mat(),
+            false, false, blokBoyutu, disparitySayisi
+        );
+
+        Mat denseSag = blokEslestir(
+            sagGri, solGri, Mat(), Mat(),
+            false, true, blokBoyutu, disparitySayisi
+        );
+
+        Mat denseSonuc = tutarlilikKontrolu(denseSol, denseSag);
+
+        denseSure.stop();
+
+        cout << "Sparse eslestirme hesaplaniyor...\n";
+
+        TickMeter sparseSure;
+        sparseSure.start();
+
+        Mat solYumusak, sagYumusak;
+        Mat solKenar, sagKenar;
+
+        GaussianBlur(solGri, solYumusak, Size(3, 3), 0.8);
+        GaussianBlur(sagGri, sagYumusak, Size(3, 3), 0.8);
+
+        Canny(solYumusak, solKenar, 50, 150);
+        Canny(sagYumusak, sagKenar, 50, 150);
+
+        Mat sparseSol = blokEslestir(
+            solGri, sagGri, solKenar, sagKenar,
+            true, false, blokBoyutu, disparitySayisi
+        );
+
+        Mat sparseSag = blokEslestir(
+            sagGri, solGri, sagKenar, solKenar,
+            true, true, blokBoyutu, disparitySayisi
+        );
+
+        Mat sparseSonuc = tutarlilikKontrolu(sparseSol, sparseSag);
+
+        sparseSure.stop();
+
+        Mat ortakAlan(sol.size(), CV_8U, Scalar(0));
+
+        ortakAlan(Rect(
+            kenarPayi,
+            yari,
+            sol.cols - 2 * kenarPayi,
+            sol.rows - 2 * yari
+        )).setTo(255);
+
+        Mat denseRenkli, sparseRenkli;
+
+        haritaKaydet(
+            "Odev_dense", denseSonuc,
+            disparitySayisi, denseRenkli
+        );
+
+        haritaKaydet(
+            "Odev_sparse", sparseSonuc,
+            disparitySayisi, sparseRenkli
+        );
+
+        if (!imwrite("Odev_sol_kenarlar.png", solKenar) ||
+            !imwrite("Odev_sag_kenarlar.png", sagKenar) ||
+            !imwrite("Odev_ortak_alan.png", ortakAlan))
         {
-            cout << adlar[i] << " hesaplaniyor...\n";
-
-            TickMeter sure;
-            sure.start();
-
-            Mat disparity = manuelSGM(
-                hacim, sol.size(),
-                p1Degerleri[i], p2Degerleri[i]
-            );
-
-            sure.stop();
-
-            Mat griHarita;
-            Mat pozitifMaske = disparity > 0;
-            Mat hesaplananMaske = disparity >= 0;
-
-            disparity.convertTo(
-                griHarita, CV_8U,
-                255.0 / (disparitySayisi - 1)
-            );
-
-            griHarita.setTo(0, pozitifMaske == 0);
-
-            applyColorMap(
-                griHarita, renkliSonuclar[i], COLORMAP_JET
-            );
-
-            renkliSonuclar[i].setTo(
-                Scalar(0, 0, 0), pozitifMaske == 0
-            );
-
-            string onEk = "4_" + adlar[i];
-
-            bool kaydedildi = true;
-            kaydedildi &= imwrite(
-                onEk + "_gri.png", griHarita
-            );
-            kaydedildi &= imwrite(
-                onEk + "_renkli.png", renkliSonuclar[i]
-            );
-            kaydedildi &= imwrite(
-                onEk + "_maske.png", hesaplananMaske
-            );
-
-            if (!kaydedildi)
-            {
-                cerr << "PNG dosyalari kaydedilemedi.\n";
-                return 1;
-            }
-
-            veriler << (adlar[i] + "_disparity") << disparity;
-            veriler << (adlar[i] + "_maske") << hesaplananMaske;
-
-            rapor << adlar[i]
-                << " P1=" << p1Degerleri[i]
-                << " P2=" << p2Degerleri[i] << "\n";
-
-            rapor << "Birikim ve disparity secimi: "
-                << sure.getTimeMilli() << " ms\n";
-
-            rapor << "Maliyet olusturma dahil toplam: "
-                << maliyetSuresi.getTimeMilli()
-                + sure.getTimeMilli()
-                << " ms\n\n";
-
-            cout << adlar[i] << ": "
-                << maliyetSuresi.getTimeMilli()
-                + sure.getTimeMilli()
-                << " ms\n";
+            cerr << "Kenar resimleri kaydedilemedi.\n";
+            return 1;
         }
 
-        Mat ilkIki, panel;
-        hconcat(renkliSonuclar[0], renkliSonuclar[1], ilkIki);
-        hconcat(ilkIki, renkliSonuclar[2], panel);
+        Mat panel;
+        hconcat(denseRenkli, sparseRenkli, panel);
 
-        if (!imwrite("4_Smoothness_karsilastirma.png", panel))
+        if (!imwrite("Odev_dense_sparse.png", panel))
         {
             cerr << "Karsilastirma resmi kaydedilemedi.\n";
             return 1;
         }
 
-        veriler.release();
+        FileStorage veri(
+            "Odev_disparity_verileri.yml", FileStorage::WRITE
+        );
+        ofstream rapor("Odev_olcumler.txt");
+
+        if (!veri.isOpened() || !rapor.is_open())
+        {
+            cerr << "Veri dosyalari acilamadi.\n";
+            return 1;
+        }
+
+        veri << "dense_ham" << denseSol;
+        veri << "dense_filtreli" << denseSonuc;
+        veri << "sparse_ham" << sparseSol;
+        veri << "sparse_filtreli" << sparseSonuc;
+        veri << "ortak_alan" << ortakAlan;
+        veri.release();
+
+        olcumYaz(
+            cout, "DENSE", denseSol, denseSonuc,
+            solGri, sagGri, ortakAlan, denseSure.getTimeMilli()
+        );
+
+        olcumYaz(
+            cout, "SPARSE", sparseSol, sparseSonuc,
+            solGri, sagGri, ortakAlan, sparseSure.getTimeMilli()
+        );
+
+        olcumYaz(
+            rapor, "DENSE", denseSol, denseSonuc,
+            solGri, sagGri, ortakAlan, denseSure.getTimeMilli()
+        );
+
+        olcumYaz(
+            rapor, "SPARSE", sparseSol, sparseSonuc,
+            solGri, sagGri, ortakAlan, sparseSure.getTimeMilli()
+        );
+
+        double hizOrani = denseSure.getTimeMilli()
+            / sparseSure.getTimeMilli();
+
+        cout << "Dense suresi / Sparse suresi: "
+            << hizOrani << "\n";
+
+        rapor << "Dense suresi / Sparse suresi: "
+            << hizOrani << "\n";
+        rapor << "Sparse suresine Gaussian ve Canny dahildir.\n";
+        rapor << "Okuma, kaydetme ve gorsellestirme harictir.\n";
+        rapor << "Fotometrik MAE disparity dogrulugu degildir.\n";
+
         rapor.close();
 
-        cout << "\nSoldan saga: Cezasiz - Orta - Yuksek\n";
-        cout << "Sonuclar kaydedildi.\n";
+        namedWindow("Sol kenarlar", WINDOW_NORMAL);
+        imshow("Sol kenarlar", solKenar);
 
-        namedWindow("Manuel SGM - Smoothness", WINDOW_NORMAL);
-        imshow("Manuel SGM - Smoothness", panel);
+        namedWindow("Sag kenarlar", WINDOW_NORMAL);
+        imshow("Sag kenarlar", sagKenar);
+
+        namedWindow("Dense - Sparse", WINDOW_NORMAL);
+        imshow("Dense - Sparse", panel);
+
+        cout << "\nSolda Dense, sagda Sparse.\n";
+        cout << "Sonuclar kaydedildi.\n";
 
         waitKey(0);
         destroyAllWindows();
