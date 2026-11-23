@@ -2,35 +2,67 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
-#include <opencv2/calib3d.hpp>
 #include <iostream>
-#include <string>
+#include <limits>
+#include <cstdlib>
 
 using namespace cv;
 using namespace std;
 
-void haritaHazirla(const Mat& ham, int disparitySayisi,
-    Mat& disparity, Mat& maske,
-    Mat& gri, Mat& renkli)
+Mat blokEslestirme(const Mat& sol, const Mat& sag,
+    int blokBoyutu, int disparitySayisi)
 {
-    ham.convertTo(disparity, CV_32F, 1.0 / 16.0);
+    CV_Assert(sol.type() == CV_8UC1);
+    CV_Assert(sag.type() == CV_8UC1);
+    CV_Assert(sol.size() == sag.size());
+    CV_Assert(blokBoyutu >= 3 && blokBoyutu % 2 == 1);
+    CV_Assert(disparitySayisi > 0);
 
-    maske = disparity > 0;
+    Mat disparity(sol.size(), CV_32F, Scalar(-1));
 
-    disparity.convertTo(
-        gri, CV_8U, 255.0 / (disparitySayisi - 1)
-    );
+    int yari = blokBoyutu / 2;
+    int maksimumDisparity = disparitySayisi - 1;
 
-    gri.setTo(0, maske == 0);
+    for (int y = yari; y < sol.rows - yari; y++)
+    {
+        for (int x = maksimumDisparity + yari;
+            x < sol.cols - yari; x++)
+        {
+            int enIyiMaliyet = numeric_limits<int>::max();
+            int enIyiDisparity = -1;
 
-    applyColorMap(gri, renkli, COLORMAP_JET);
-    renkli.setTo(Scalar(0, 0, 0), maske == 0);
-}
+            for (int d = 0; d < disparitySayisi; d++)
+            {
+                int sagX = x - d;
+                int sad = 0;
 
-void goster(const string& ad, const Mat& resim)
-{
-    namedWindow(ad, WINDOW_NORMAL);
-    imshow(ad, resim);
+                for (int dy = -yari; dy <= yari; dy++)
+                {
+                    const uchar* solSatir = sol.ptr<uchar>(y + dy);
+                    const uchar* sagSatir = sag.ptr<uchar>(y + dy);
+
+                    for (int dx = -yari; dx <= yari; dx++)
+                    {
+                        int solDeger = solSatir[x + dx];
+                        int sagDeger = sagSatir[sagX + dx];
+
+                        sad += std::abs(solDeger - sagDeger);
+                    }
+                }
+
+                if (sad < enIyiMaliyet)
+                {
+                    enIyiMaliyet = sad;
+                    enIyiDisparity = d;
+                }
+            }
+
+            disparity.at<float>(y, x) =
+                static_cast<float>(enIyiDisparity);
+        }
+    }
+
+    return disparity;
 }
 
 int main()
@@ -42,8 +74,7 @@ int main()
 
         if (sol.empty() || sag.empty())
         {
-            cout << "PPM dosyalari okunamadi.\n";
-            cout << "Dosyalari proje klasorune koyunuz.\n";
+            cout << "PPM dosyalari bulunamadi.\n";
             return 1;
         }
 
@@ -57,116 +88,78 @@ int main()
         cvtColor(sol, solGri, COLOR_BGR2GRAY);
         cvtColor(sag, sagGri, COLOR_BGR2GRAY);
 
+        const int blokBoyutu = 7;
         const int disparitySayisi = 32;
 
-        Ptr<StereoBM> bm = StereoBM::create(disparitySayisi, 15);
-        bm->setMinDisparity(0);
-        bm->setTextureThreshold(10);
-        bm->setUniquenessRatio(10);
-        bm->setSpeckleWindowSize(50);
-        bm->setSpeckleRange(2);
-        bm->setDisp12MaxDiff(1);
+        TickMeter sure;
+        sure.start();
 
-        const int blokBoyutu = 5;
-
-        Ptr<StereoSGBM> sgbm = StereoSGBM::create(
-            0,
-            disparitySayisi,
-            blokBoyutu
+        Mat disparity = blokEslestirme(
+            solGri, sagGri, blokBoyutu, disparitySayisi
         );
 
-        sgbm->setP1(8 * blokBoyutu * blokBoyutu);
-        sgbm->setP2(32 * blokBoyutu * blokBoyutu);
-        sgbm->setPreFilterCap(31);
-        sgbm->setUniquenessRatio(10);
-        sgbm->setSpeckleWindowSize(50);
-        sgbm->setSpeckleRange(2);
-        sgbm->setDisp12MaxDiff(1);
-        sgbm->setMode(StereoSGBM::MODE_SGBM);
+        sure.stop();
 
-        Mat bmHam, sgbmHam;
+        Mat hesaplananMaske = disparity >= 0;
+        Mat pozitifMaske = disparity > 0;
 
-        TickMeter bmSure, sgbmSure;
+        Mat griHarita;
+        disparity.convertTo(
+            griHarita, CV_8U, 255.0 / (disparitySayisi - 1)
+        );
+        griHarita.setTo(0, pozitifMaske == 0);
 
-        bmSure.start();
-        bm->compute(solGri, sagGri, bmHam);
-        bmSure.stop();
+        Mat renkliHarita;
+        applyColorMap(griHarita, renkliHarita, COLORMAP_JET);
+        renkliHarita.setTo(Scalar(0, 0, 0), pozitifMaske == 0);
 
-        sgbmSure.start();
-        sgbm->compute(solGri, sagGri, sgbmHam);
-        sgbmSure.stop();
+        Mat ilkPanel, panel;
+        hconcat(sol, sag, ilkPanel);
+        hconcat(ilkPanel, renkliHarita, panel);
 
-        Mat bmDisparity, bmMaske, bmGri, bmRenkli;
-        Mat sgbmDisparity, sgbmMaske, sgbmGri, sgbmRenkli;
+        bool kaydedildi = true;
+        kaydedildi &= imwrite("2_manuel_gri.png", griHarita);
+        kaydedildi &= imwrite("2_manuel_renkli.png", renkliHarita);
+        kaydedildi &= imwrite("2_karsilastirma.png", panel);
+        kaydedildi &= imwrite("2_hesaplanan_maske.png", hesaplananMaske);
 
-        haritaHazirla(bmHam, disparitySayisi,
-            bmDisparity, bmMaske, bmGri, bmRenkli);
+        FileStorage dosya(
+            "2_disparity_verileri.yml", FileStorage::WRITE
+        );
 
-        haritaHazirla(sgbmHam, disparitySayisi,
-            sgbmDisparity, sgbmMaske, sgbmGri, sgbmRenkli);
-
-        imwrite("1_sol.png", sol);
-        imwrite("1_sag.png", sag);
-        imwrite("1_BM_gri.png", bmGri);
-        imwrite("1_BM_renkli.png", bmRenkli);
-        imwrite("1_SGBM_gri.png", sgbmGri);
-        imwrite("1_SGBM_renkli.png", sgbmRenkli);
-
-        FileStorage dosya("1_disparity_verileri.yml", FileStorage::WRITE);
-
-        if (!dosya.isOpened())
+        if (!dosya.isOpened() || !kaydedildi)
         {
-            cerr << "Sayisal sonuc dosyasi acilamadi.\n";
+            cerr << "Sonuc dosyalarinin kaydinda hata olustu.\n";
             return 1;
         }
 
-        dosya << "BM_disparity_piksel" << bmDisparity;
-        dosya << "BM_gecerli_maske" << bmMaske;
-        dosya << "SGBM_disparity_piksel" << sgbmDisparity;
-        dosya << "SGBM_gecerli_maske" << sgbmMaske;
+        dosya << "disparity_piksel" << disparity;
+        dosya << "hesaplanan_maske" << hesaplananMaske;
+        dosya << "blok_boyutu" << blokBoyutu;
+        dosya << "disparity_sayisi" << disparitySayisi;
         dosya.release();
 
-        Mat bmPanel, sgbmPanel;
+        cout << "Yontem: Manuel blok eslestirme - SAD\n";
+        cout << "Blok boyutu: " << blokBoyutu
+            << " x " << blokBoyutu << "\n";
+        cout << "Aranan disparity: 0 - "
+            << disparitySayisi - 1 << " piksel\n";
+        cout << "Hesaplama suresi: "
+            << sure.getTimeMilli() << " ms\n";
+        cout << "Sonuclar kaydedildi.\n";
 
-        hconcat(sol, bmRenkli, bmPanel);
-        hconcat(sol, sgbmRenkli, sgbmPanel);
+        namedWindow("Sol - Sag - Manuel SAD", WINDOW_NORMAL);
+        imshow("Sol - Sag - Manuel SAD", panel);
 
-        imwrite("1_BM_karsilastirma.png", bmPanel);
-        imwrite("1_SGBM_karsilastirma.png", sgbmPanel);
-
-        cout << "Goruntu boyutu: "
-            << sol.cols << " x " << sol.rows << "\n";
-
-        cout << "StereoBM hesaplama suresi: "
-            << bmSure.getTimeMilli() << " ms\n";
-
-        cout << "StereoSGBM hesaplama suresi: "
-            << sgbmSure.getTimeMilli() << " ms\n";
-
-        cout << "BM pozitif disparity orani: %"
-            << 100.0 * countNonZero(bmMaske) / bmMaske.total()
-            << "\n";
-
-        cout << "SGBM pozitif disparity orani: %"
-            << 100.0 * countNonZero(sgbmMaske) / sgbmMaske.total()
-            << "\n";
-
-        cout << "\nSonuclar kaydedildi.\n";
-        cout << "Pencereleri kapatmak icin bir tusa basin.\n";
-
-        goster("Sol goruntu", sol);
-        goster("Sag goruntu", sag);
-        goster("StereoBM - Sol ve disparity", bmPanel);
-        goster("StereoSGBM - Sol ve disparity", sgbmPanel);
-        goster("StereoBM - Gri disparity", bmGri);
-        goster("StereoSGBM - Gri disparity", sgbmGri);
+        namedWindow("Manuel gri disparity", WINDOW_NORMAL);
+        imshow("Manuel gri disparity", griHarita);
 
         waitKey(0);
         destroyAllWindows();
     }
     catch (const cv::Exception& hata)
     {
-        cerr << "OpenCV hatasi:\n" << hata.what() << "\n";
+        cerr << hata.what() << "\n";
         return 1;
     }
 
